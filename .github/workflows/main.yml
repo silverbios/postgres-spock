@@ -22,8 +22,8 @@ jobs:
       - name: Extract Versions
         id: extract_versions
         run: |
-          POSTGRES_VERSION=$(grep -oP '(?<=^FROM postgres:)\d+' Dockerfile)
-          SPOCK_VERSION=$(grep -oP '(?<=^ENV SPOCK_VERSION )[^ ]+' Dockerfile)
+          POSTGRES_VERSION=$(grep -oP '(?<=^FROM postgres:)[^ ]+' Dockerfile | cut -d':' -f2)
+          SPOCK_VERSION=$(grep -oP '(?<=^ENV SPOCK_VERSION=)[^ ]+' Dockerfile)
           echo "POSTGRES_VERSION=$POSTGRES_VERSION" >> $GITHUB_ENV
           echo "SPOCK_VERSION=$SPOCK_VERSION" >> $GITHUB_ENV
 
