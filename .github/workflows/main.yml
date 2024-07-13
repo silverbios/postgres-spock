@@ -4,14 +4,16 @@ on:
   push:
     branches:
       - 'main'
-
   pull_request:
     branches:
       - 'main'
+  workflow_dispatch: # Allows manual triggering of the workflow
+  schedule:
+    - cron: '0 0 * * 0' # Weekly schedule at midnight on Sunday
 
 jobs:
-  build:
-    name: Build & push docker image
+  check-and-build:
+    name: Check for new SHA and build & push Docker image
     runs-on: ubuntu-latest
     env:
       IMG_NAME: ${{ github.repository }}
@@ -19,32 +21,67 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Extract Versions
-        id: extract_versions
+      - name: Install jq
+        run: sudo apt-get install -y jq
+
+      - name: Get current PostgreSQL version from Dockerfile
+        id: get_current_version
         run: |
           POSTGRES_VERSION=$(grep -oP '(?<=^FROM postgres:)[^ ]+' Dockerfile | cut -d':' -f2)
+          echo "POSTGRES_VERSION=${POSTGRES_VERSION}" >> $GITHUB_ENV
+
+      - name: Get latest PostgreSQL SHA
+        id: get_latest_sha
+        run: |
+          LATEST_SHA=$(curl -s https://registry.hub.docker.com/v2/library/postgres/manifests/16 | jq -r '.config.digest')
+          echo "LATEST_SHA=${LATEST_SHA}" >> $GITHUB_ENV
+
+      - name: Get current PostgreSQL SHA
+        id: get_current_sha
+        run: |
+          CURRENT_SHA=$(docker manifest inspect postgres:16-${{ env.POSTGRES_VERSION }} | jq -r '.config.digest')
+          echo "CURRENT_SHA=${CURRENT_SHA}" >> $GITHUB_ENV
+
+      - name: Compare SHAs
+        id: compare_shas
+        run: |
+          if [ "${CURRENT_SHA}" = "${LATEST_SHA}" ]; then
+            echo "No new SHA found for postgres:16-${{ env.POSTGRES_VERSION }}. Exiting."
+            exit 0
+          else
+            echo "New SHA found for postgres:16-${{ env.POSTGRES_VERSION }}. Proceeding with the build."
+            echo "BUILD_REQUIRED=true" >> $GITHUB_ENV
+          fi
+
+      - name: Extract Versions
+        if: env.BUILD_REQUIRED == 'true'
+        id: extract_versions
+        run: |
           SPOCK_VERSION=$(grep -oP '(?<=^ENV SPOCK_VERSION=)[^ ]+' Dockerfile)
-          echo "POSTGRES_VERSION=$POSTGRES_VERSION" >> $GITHUB_ENV
           echo "SPOCK_VERSION=$SPOCK_VERSION" >> $GITHUB_ENV
 
       - name: Debug
+        if: env.BUILD_REQUIRED == 'true'
         run: |
           echo "github.ref -> ${{ github.ref }}"
           echo "POSTGRES_VERSION -> ${{ env.POSTGRES_VERSION }}"
           echo "SPOCK_VERSION -> ${{ env.SPOCK_VERSION }}"
 
       - name: Set up Docker Buildx
+        if: env.BUILD_REQUIRED == 'true'
         uses: docker/setup-buildx-action@v3
 
       - name: Log in to Docker Hub
+        if: env.BUILD_REQUIRED == 'true'
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DU }}
           password: ${{ secrets.DT }}
 
-      - name: Push Docker image
+      - name: Build and Push Docker image
+        if: env.BUILD_REQUIRED == 'true'
         uses: docker/build-push-action@v5
         with:
           context: .
-          tags: ${{ env.IMG_NAME }}:${{ env.POSTGRES_VERSION }}-${{ env.SPOCK_VERSION }}  # Tag for pushing the image
+          tags: ${{ env.IMG_NAME }}:${{ env.POSTGRES_VERSION }}-${{ env.SPOCK_VERSION }}
           push: true
